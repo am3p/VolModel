@@ -1,0 +1,156 @@
+Option Explicit
+Option Base 1
+
+' Subroutine: Implied forward calculation: use in the Black volatility calculation
+' Rule: Forward = Strike * exp(rf*T) * (Call - Put) which absolute call-put spread is the smallest
+Sub ExtractImpForward()
+
+Dim i As Integer, j As Integer, ind As Integer
+Dim cp_diff As Single, ttm As Long, rf As Single, rf_spot As Single
+
+i = 1
+j = 1
+ind = 1
+cp_diff = 100000
+ttm = Range("OptionData")(1, 1).Value
+
+' Find the smallest call-put spread throughout options of the same maturity
+Do While Range("OptionData")(i, 1).Value > 0
+    If ttm <> Range("OptionData")(i, 1).Value Then
+        rf = Range("OptionData")(ind, 6).Value
+        rf_spot = Range("OptionData")(ind, 7).Value
+        Range("OptionMarketParam")(j, 1).Value = Range("OptionData")(ind, 1).Value
+        Range("OptionMarketParam")(j, 2).Value = Range("OptionData")(ind, 2).Value + _
+                                                 Exp(rf * Range("OptionData")(ind, 1).Value / 365) * (Range("OptionData")(ind, 4).Value - Range("OptionData")(ind + 1, 4).Value)
+        Range("OptionMarketParam")(j, 3).Value = rf
+        Range("OptionMarketParam")(j, 4).Value = rf_spot
+        ttm = Range("OptionData")(i, 1).Value
+        cp_diff = 100000
+        j = j + 1
+    End If
+        
+    If cp_diff > Abs(Range("OptionData")(i, 4).Value - Range("OptionData")(i + 1, 4).Value) Then
+       cp_diff = Abs(Range("OptionData")(i, 4).Value - Range("OptionData")(i + 1, 4).Value)
+       ind = i
+    End If
+
+    i = i + 2
+Loop
+
+' Arrange result
+rf = Range("OptionData")(ind, 6).Value
+rf_spot = Range("OptionData")(ind, 7).Value
+Range("OptionMarketParam")(j, 1).Value = Range("OptionData")(ind, 1).Value
+Range("OptionMarketParam")(j, 2).Value = Range("OptionData")(ind, 2).Value + _
+                                         Exp(rf * Range("OptionData")(ind, 1).Value / 365) * (Range("OptionData")(ind, 4).Value - Range("OptionData")(ind + 1, 4).Value)
+Range("OptionMarketParam")(j, 3).Value = rf
+Range("OptionMarketParam")(j, 4).Value = rf_spot
+
+End Sub
+
+' Subroutine: Calculate and arrange Black volatility for each option
+' If the volatility is not calculated or not in (0.001% ~ 100%) range, return -1
+Sub BlackVol()
+    
+Dim i As Integer, j As Integer
+Dim opt As OptData, p As MarketParam
+Dim impv As Single
+
+i = 1
+j = 1
+
+Do While Range("OptionData")(i, 1).Value > 0
+    If Range("OptionData")(i, 1).Value <> Range("OptionMarketParam")(j, 1).Value Then
+        Do While Range("OptionData")(i, 1).Value <> Range("OptionMarketParam")(j, 1).Value
+            j = j + 1
+        Loop
+    End If
+    
+    ' Arrange option infomation
+    opt.ttm = Range("OptionData")(i, 1).Value / 365
+    opt.Strike = Range("OptionData")(i, 2).Value
+    If Range("OptionData")(i, 3).Value = "C" Then
+        opt.CP = 1
+    ElseIf Range("OptionData")(i, 3).Value = "P" Then
+        opt.CP = -1
+    End If
+    opt.price = Range("OptionData")(i, 4).Value
+    
+    p.f = Range("OptionMarketParam")(j, 2).Value
+    p.rf = Range("OptionMarketParam")(j, 3).Value
+    
+    ' Call C++ DLL
+    Range("OptionData")(i, 8).Value = BlackVolCalc(opt, p)
+    
+    i = i + 1
+Loop
+
+End Sub
+
+' Subroutine: Sample selection to calculate SABR parameter
+Sub SABRSampleSelect()
+
+Dim i As Long, j As Long, l As Long, m As Long, size As Long
+Dim data As SABRData, SABRp0 As SABRParam, SABRp1 As SABRParam
+Dim obs As Long, min_price As Double
+
+' Minimum price limit (KOSPI - 0.01 / HSCEI - 1)
+' Seperate sample selection criterion along maturities (KOSPI - 11 / HSCEI - 2)
+If Range("IndexName").Value = "KOSPI200" Then
+    min_price = 0.01
+    obs = 11
+ElseIf Range("IndexName").Value = "HSCEI" Then
+    min_price = 1
+    obs = 2
+End If
+
+i = 1
+j = 1
+Do While Range("OptionData")(i, 1).Value > 0 And Len(Range("OptionData")(i, 1)) > 0
+    ' Move to the samples of selected maturity
+    If Range("OptionData")(i, 1).Value <> Range("OptionMarketParam")(j, 1).Value Then
+        Do While Range("OptionData")(i, 1).Value <> Range("OptionMarketParam")(j, 1).Value
+            j = j + 1
+        Loop
+    End If
+    
+    ' Remove options with unappropriate Black volatility
+    If Range("OptionData")(i, 8) = -1 Then
+        Range("OptionData")(i, 9).Value = "X"
+        
+    ' Remove call options whose strike is less than 97.5% of the spot
+    ElseIf Range("OptionData")(i, 3) = "C" And Range("OptionData")(i, 2) < 0.975 * Range("OptionMarketParam")(j, 2) Then
+        Range("OptionData")(i, 9).Value = "X"
+        
+    ' Remove call options whose strike is less than 102.5% of the spot
+    ElseIf Range("OptionData")(i, 3) = "P" And Range("OptionData")(i, 2) > 1.025 * Range("OptionMarketParam")(j, 2) Then
+        Range("OptionData")(i, 9).Value = "X"
+        
+    ' Remove options with no volumes in the nth maturity (n <= obs)
+    ElseIf (Range("OptionData")(i, 5) = 0 Or Range("OptionData")(i, 5) = "#N/A N/A") And j <= obs Then
+        Range("OptionData")(i, 9).Value = "X"
+        
+    ' Remove call options with minimum price for in the nth maturity (n > obs) when minimum price is occured for smaller strike
+    ElseIf Range("OptionData")(i, 3) = "C" And j > obs And Range("OptionData")(i, 4).Value = min_price And _
+           Range("OptionData")(i + 1, 4) = Range("OptionData")(i, 4) And _
+           Range("OptionData")(i + 1, 1) = Range("OptionData")(i, 1) Then
+        Range("OptionData")(i, 9).Value = "X"
+        
+    ' Remove put options with minimum price for in the nth maturity (n > obs) when minimum price is occured for larger strike
+    ElseIf Range("OptionData")(i, 3) = "P" And j > obs And Range("OptionData")(i, 4).Value = min_price And _
+           Range("OptionData")(i - 1, 4) = Range("OptionData")(i, 4) And _
+           Range("OptionData")(i - 1, 1) = Range("OptionData")(i, 1) Then
+        Range("OptionData")(i - 1, 9).Value = "X"
+        
+    ' Others are OK to be selected
+    Else
+        Range("OptionData")(i, 9).Value = "O"
+    End If
+    i = i + 1
+Loop
+
+End Sub
+
+
+
+

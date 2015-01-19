@@ -1,0 +1,50 @@
+Option Explicit
+Option Base 1
+
+' Function: calculate average of integrated interest rate by linear interpolation
+Function RateInteg(t() As Double, r() As Double, t0 As Double) As Double
+
+Dim i As Integer, j As Integer, r0 As Double, r_interp As Double, t_prior As Double, r_prior As Double
+i = 1
+t_prior = 0
+r_prior = r(1)
+Do While t(i) < t0
+    i = i + 1
+Loop
+
+If i = 1 Then
+    r0 = r(1) * t0
+Else
+    For j = 1 To i - 1
+        r0 = r0 + (r_prior + r(j)) / 2# * (t(j) - t_prior)
+        t_prior = t(j)
+        r_prior = r(j)
+    Next j
+    
+    r_interp = r_prior + (r(i) - r_prior) / (t(i) - t_prior) * (t0 - t_prior)
+    r0 = r0 + (r_interp + r_prior) / 2# * (t0 - t_prior)
+End If
+
+RateInteg = r0 / t0
+
+End Function
+
+' Function: calculate spot interest rate by linear interpolation / nearest extrapolation
+Function RateInterp(t() As Double, r() As Double, t0 As Double) As Double
+
+Dim i As Integer, r0 As Double
+
+i = 1
+Do While t(i) < t0
+    i = i + 1
+Loop
+
+If i = 1 Then
+    r0 = r(1)
+Else
+    r0 = r(i - 1) + (r(i) - r(i - 1)) / (t(i) - t(i - 1)) * (t0 - t(i - 1))
+End If
+
+RateInterp = r0
+
+End Function

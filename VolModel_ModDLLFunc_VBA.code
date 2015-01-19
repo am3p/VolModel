@@ -1,0 +1,29 @@
+
+' C++ DLL: Black vol calculator
+Public Declare Function BlackVolCalc Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                     (opt As OptData, p As MarketParam) As Single
+
+' C++ DLL: SABR parameter calculation (raw fitting)
+Public Declare Function SABRCalc_AllParam Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                          (data As SABRData) As SABRParam
+
+' C++ DLL: SABR parameter calculation (applying some adjustment)
+Public Declare Function SABRCalc_Adjust Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                        (ExpSize As Long, skipind As Long, data As SABRData, nu_a As Single, nu_b As Single) As SABRParamSeries
+                                        
+' C++ DLL: Parameter extension
+Public Declare Function ParamExt Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                 (p0 As SABRParamSeries, skipind As Long, _
+                                  nu_a_ As Single, nu_b_ As Single, nu0skipind As Single, _
+                                  alpha_first As Single, exp_first As Single, _
+                                  S0 As Single, rc As RateCurve, q As Single) As SABRParamSeries
+
+' C++ DLL: Local volatility calculation
+Public Declare Function LocalVolCalcSABR Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                         (p As SABRParamSeries, S0 As Single, q As Single) As VolSurf
+
+' C++ DLL: Local volatility calculation
+Public Declare Function LocalVolCalcVar Lib "C:\Users\Administrator\Desktop\Project\VolModel\Release\VolModel.dll" _
+                                        (vs As VolSurf, F0 As Single, S0 As Single) As VolSurf
+
+

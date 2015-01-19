@@ -1,0 +1,435 @@
+Option Explicit
+Option Base 1
+
+'Subroutine: Fit SABR parameter to option data (raw fitting)
+Sub SABRFit()
+
+Dim i As Long, j As Long, l As Long, m As Long, size As Long
+Dim data As SABRData, SABRp0 As SABRParam, SABRp1 As SABRParam
+Dim opt_blank As OptData
+
+i = 1
+j = 1
+m = 1
+Do While Range("OptionMarketParam")(i, 1).Value > 0
+    For l = 1 To UBound(data.opt)
+        data.opt(l) = opt_blank
+    Next l
+
+    ' Load time to maturity / implied forward / risk-free rate
+    data.p.ttm = Range("OptionMarketParam")(i, 1).Value
+    data.p.f = Range("OptionMarketParam")(i, 2).Value
+    data.p.rf = Range("OptionMarketParam")(i, 3).Value
+        
+    ' Count available sample data for the maturity
+    data.size = 0
+    Do While Range("OptionData")(j, 1).Value = Range("OptionMarketParam")(i, 1).Value
+        j = j + 1
+        If Range("OptionData")(j, 10).Value = "O" Then
+            data.size = data.size + 1
+        End If
+    Loop
+
+    ' Fit when avilable sample is 5 or more
+    If data.size > 5 Then
+        l = 1
+        Do While Range("OptionData")(m, 1).Value = data.p.ttm
+            If Range("OptionData")(m, 10).Value = "O" Then
+                data.opt(l).ttm = Range("OptionData")(m, 1).Value
+                data.opt(l).Strike = Range("OptionData")(m, 2).Value
+                If Range("OptionData")(m, 3).Value = "C" Then
+                    data.opt(l).CP = 1
+                ElseIf Range("OptionData")(m, 3).Value = "P" Then
+                    data.opt(l).CP = -1
+                End If
+                data.opt(l).impv = Range("OptionData")(m, 8).Value
+                l = l + 1
+            End If
+            m = m + 1
+        Loop
+    
+        ' Initial SABR parameter
+        data.p.alpha = 0.1
+        data.p.rho = -0.5
+        data.p.nu = 0.5
+        
+        ' Call C++ DLL
+        SABRp1 = SABRCalc_AllParam(data)
+        
+        ' Arrange result
+        Range("SABRFitParam")(i, 1).Value = data.p.ttm
+        Range("SABRFitParam")(i, 2).Value = SABRp1.alpha
+        Range("SABRFitParam")(i, 3).Value = SABRp1.rho
+        Range("SABRFitParam")(i, 4).Value = SABRp1.nu
+    Else
+        ' Move to next maturity sample
+        m = j
+    End If
+    
+    i = i + 1
+Loop
+
+End Sub
+
+
+'Subroutine: Fit SABR parameter to option data (adjusted fitting)
+Sub SABRFitAdj()
+
+Dim i As Long, j As Long, l As Long, obs As Long, skipind As Long
+Dim data() As SABRData, SABRp1 As SABRParamSeries
+
+' Seperate sample selection criterion along maturities (KOSPI - 11 / HSCEI - 2)
+If Range("IndexName").Value = "KOSPI200" Then
+    obs = 11
+ElseIf Range("IndexName").Range("B2").Value = "HSCEI" Then
+    obs = 2
+End If
+' Maturities to maintain the first stage SABR fit result
+skipind = 2
+
+' Set initial SABR parameter series by raw fit result
+ReDim data(1 To obs)
+For i = 1 To obs
+    data(i).p.ttm = Range("OptionMarketParam")(i, 1).Value
+    If Range("SABRFitParam")(i, 2).Value > 0 Then
+        data(i).p.alpha = Range("SABRFitParam")(i, 2).Value
+    Else
+        ' If some maturities do not have raw SABR result, set alpha to original initial value
+        data(i).p.alpha = 0.1
+    End If
+    data(i).p.f = Range("OptionMarketParam")(i, 2).Value
+    data(i).p.rf = Range("OptionMarketParam")(i, 3).Value
+    data(i).size = 0
+Next i
+
+i = 1
+j = 1
+l = 1
+' Arrange all appropriate option data samples
+Do While Range("OptionData")(i, 1).Value > 0 And Len(Range("OptionData")(i, 1)) > 0
+    If Range("OptionData")(i, 1).Value <> data(j).p.ttm Then
+        Do While Range("OptionData")(i, 1).Value <> data(j).p.ttm And j < UBound(data)
+            j = j + 1
+        Loop
+        l = 1
+    End If
+    
+    If Range("OptionData")(i, 9).Value = "O" Then
+        data(j).opt(l).ttm = Range("OptionData")(i, 1).Value
+        data(j).opt(l).Strike = Range("OptionData")(i, 2).Value
+        If Range("OptionData")(i, 3).Value = "C" Then
+            data(j).opt(l).CP = 1
+        ElseIf Range("OptionData")(i, 3).Value = "P" Then
+            data(j).opt(l).CP = -1
+        End If
+        data(j).opt(l).impv = Range("OptionData")(i, 8).Value
+        data(j).size = data(j).size + 1
+        l = l + 1
+    End If
+        
+    i = i + 1
+Loop
+
+' Load regression coefficients for the parameter nu
+i = 1
+Dim nu_a As Single, nu_b As Single
+Do While Range("NuCoeffs")(i, 1).Value < Worksheets("Implied Vol").Range("B1").Value And Range("NuCoeffs")(i, 1).Value > 0
+    i = i + 1
+Loop
+nu_a = Range("NuCoeffs")(i, 2).Value
+nu_b = Range("NuCoeffs")(i, 3).Value
+
+
+' Call C++ DLL
+SABRp1 = SABRCalc_Adjust(obs, skipind, data(1), nu_a, nu_b)
+
+' Arrange adjusted fit result
+For i = 1 To obs
+    If i <= skipind Then
+        For j = 1 To 4
+            Range("SABRFitParamAdj")(i, j).Value = Range("SABRFitParam")(i, j).Value
+        Next j
+    ElseIf SABRp1.p(i).alpha > 0 Then
+        Range("SABRFitParamAdj")(i, 1).Value = data(i).p.ttm
+        Range("SABRFitParamAdj")(i, 2).Value = SABRp1.p(i).alpha
+        Range("SABRFitParamAdj")(i, 3).Value = SABRp1.p(i).rho
+        Range("SABRFitParamAdj")(i, 4).Value = SABRp1.p(i).nu
+    End If
+Next i
+
+End Sub
+
+' Subroutine: SABR parameter interp/extrapolation for the predetermined time to expiry
+Sub SABRParamExt()
+
+Dim i As Integer, j As Integer
+Dim p0 As SABRParamSeries, skipind As Long
+Dim nu_a As Single, nu_b As Single, nu_skipind As Single
+Dim alpha_first As Single, exp_first As Single
+
+' Maturities to maintain the first stage SABR fit result
+skipind = 3
+p0.size = 0
+alpha_first = -1
+exp_first = -1
+
+' Load regression coefficients for the parameter nu
+i = 1
+Do While Range("NuCoeffs")(i, 1).Value < Worksheets("Implied Vol").Range("B1").Value And Range("NuCoeffs")(i, 1).Value > 0
+    i = i + 1
+Loop
+nu_a = Range("NuCoeffs")(i, 2).Value
+nu_b = Range("NuCoeffs")(i, 3).Value
+
+' Temporary part: Load index spot price and dividend yield (KOSPI200: column 1, HSCEI: column 5)
+Dim S0 As Single, q As Single, col_ind As Integer
+If Range("IndexName").Value = "KOSPI200" Then
+    col_ind = 1
+ElseIf Range("IndexName").Value = "HSCEI" Then
+    col_ind = 4
+End If
+i = 1
+Do While Range("IndexHistory")(i, col_ind).Value < Range("Date").Value
+    i = i + 1
+Loop
+S0 = Range("IndexHistory")(i, col_ind + 1).Value
+q = Range("IndexHistory")(i, col_ind + 2).Value
+
+' Temporary part: Load risk-free rate curve (KOSPI200: Curve History (KRW), HSCEI: Curve History (HKD))
+Dim rc As RateCurve, rc_wrkst As String
+If Range("IndexName").Value = "KOSPI200" Then
+    rc_wrkst = "KRWCurve"
+ElseIf Range("IndexName").Value = "HSCEI" Then
+    rc_wrkst = "HKDCurve"
+End If
+i = 1
+rc.size = 0
+Do While Range(rc_wrkst).Cells(1, i + 1).Value > 0
+    rc.t(i) = Range(rc_wrkst).Cells(1, i + 1).Value
+    rc.size = rc.size + 1
+    i = i + 1
+Loop
+i = 1
+Do While Range(rc_wrkst).Cells(i + 1, 1).Value < Range("Date").Value
+    i = i + 1
+Loop
+If Range(rc_wrkst).Cells(i + 1, 1).Value <> Range("Date").Value Then
+    i = i - 1
+End If
+For j = 1 To rc.size
+    rc.r(j) = Range(rc_wrkst).Cells(i + 1, j + 1).Value
+Next j
+
+' Arrange SABR adjusted fit parameter
+i = 1
+Do While Range("OptionMarketParam")(i, 1).Value > 0
+    ' If the SABR parameter of the first expiry is well-defined
+    If Range("SABRFitParamAdj")(i, 1).Value > 0 Then
+        ' If the first expiry is less than five days, skip it and just consider alpha
+        If i = 1 And Range("SABRFitParamAdj")(i, 1).Value <= 5 Then
+            skipind = skipind - 1
+            alpha_first = Range("SABRFitParamAdj")(i, 2).Value
+            exp_first = Range("SABRFitParamAdj")(i, 1).Value
+        Else
+            p0.size = p0.size + 1
+            p0.t(p0.size) = Range("SABRFitParamAdj")(i, 1).Value
+            p0.p(p0.size).alpha = Range("SABRFitParamAdj")(i, 2).Value
+            p0.p(p0.size).rho = Range("SABRFitParamAdj")(i, 3).Value
+            p0.p(p0.size).nu = Range("SABRFitParamAdj")(i, 4).Value
+            p0.p(p0.size).f = Range("OptionMarketParam")(i, 2).Value
+        End If
+        ' nu parameter of (skipind+1)th maturity; necessary in interpolation step
+        If i = skipind Then
+            nu_skipind = Range("SABRFitParamAdj")(i, 4).Value
+        End If
+        
+    ' If the SABR parameter of the first expiry is not defined
+    Else
+        If i = skipind Then
+            j = i
+            Do While Range("SABRFitParamAdj")(j, 1).Value = 0
+                j = j - 1
+            Loop
+            skipind = skipind - 1
+            nu_skipind = Range("SABRFitParamAdj")(j, 4).Value
+        End If
+    End If
+    
+    i = i + 1
+Loop
+
+' CALL C++ DLL
+Dim p1 As SABRParamSeries
+p1 = ParamExt(p0, skipind, nu_a, nu_b, nu_skipind, alpha_first, exp_first, S0, rc, q)
+
+' Arrange result
+For i = 1 To p1.size
+    Range("SABRFitParamExt")(i, 1).Value = p1.t(i)
+    Range("SABRFitParamExt")(i, 2).Value = p1.p(i).f
+    Range("SABRFitParamExt")(i, 3).Value = p1.p(i).rf
+    Range("SABRFitParamExt")(i, 4).Value = p1.p(i).alpha
+    Range("SABRFitParamExt")(i, 5).Value = p1.p(i).rho
+    Range("SABRFitParamExt")(i, 6).Value = p1.p(i).nu
+Next i
+
+End Sub
+
+' Temporary routine: Estimate SABR param from a bunch of data
+Sub SABRParamStore()
+
+    Dim i As Integer, j As Integer, k1 As Integer, k2 As Integer, k3 As Integer
+    Dim fn_folder As String, fn_src As String
+    Dim rng_dest As Range, rng_src As Range, rng_result As Range, rng_result_adj As Range, rng_result_ext As Range
+    Dim dt As Date
+    Dim t(1 To 13) As Double, r(1 To 13) As Double
+    
+    dt = DateSerial(2014, 10, 1)
+    fn_folder = "C:\Users\Administrator\Downloads\optdata\KOSPI\"
+    Set rng_dest = Worksheets("Implied Vol").Range("A4")
+    Set rng_result = Worksheets("SABR param").Range("A2")
+    Set rng_result_adj = Worksheets("SABR param").Range("O2")
+    Set rng_result_ext = Worksheets("SABR param").Range("X2")
+    rng_result.Offset(0, 0).Value = "Date"
+    rng_result.Offset(0, 1).Value = "TTM"
+    rng_result.Offset(0, 2).Value = "F"
+    rng_result.Offset(0, 3).Value = "rf"
+    rng_result.Offset(0, 4).Value = "rf_spot"
+    rng_result.Offset(0, 5).Value = "alpha"
+    rng_result.Offset(0, 6).Value = "rho"
+    rng_result.Offset(0, 7).Value = "nu"
+    rng_result_adj.Offset(0, 0).Value = "Date"
+    rng_result_adj.Offset(0, 1).Value = "TTM"
+    rng_result_adj.Offset(0, 2).Value = "F"
+    rng_result_adj.Offset(0, 3).Value = "rf"
+    rng_result_adj.Offset(0, 4).Value = "rf_spot"
+    rng_result_adj.Offset(0, 5).Value = "alpha"
+    rng_result_adj.Offset(0, 6).Value = "rho"
+    rng_result_adj.Offset(0, 7).Value = "nu"
+    rng_result_ext.Offset(0, 0).Value = "Date"
+    rng_result_ext.Offset(0, 1).Value = "TTM"
+    rng_result_ext.Offset(0, 2).Value = "F"
+    rng_result_ext.Offset(0, 3).Value = "rf_spot"
+    rng_result_ext.Offset(0, 4).Value = "alpha"
+    rng_result_ext.Offset(0, 5).Value = "rho"
+    rng_result_ext.Offset(0, 6).Value = "nu"
+    
+    Dim m As Double, n As Double
+    Dim x As Double, y As Double, xx As Double, xy As Double, avgx As Double, avgy As Double, count As Double
+    k1 = 1
+    k2 = 1
+    k3 = 1
+    m = 1
+    Do While dt < DateSerial(2014, 12, 1)
+        Range("Date").Value = Format(dt, "yyyy-mm-dd")
+        i = 1
+        x = 0
+        y = 0
+        xx = 0
+        xy = 0
+        If Range("IndexName").Value = "KOSPI200" Then
+            fn_src = "KOSPI_ExchData_" & Format(dt, "yymmdd") & ".xlsx"
+        ElseIf Range("IndexName").Value = "HSCEI" Then
+            fn_src = "HSCEI_ExchData_" & Format(dt, "yymmdd") & ".xlsx"
+        End If
+        
+        If Dir(fn_folder & fn_src) <> "" Then
+            Range("OptionData").ClearContents
+            Range("OptionMarketParam").ClearContents
+            Range("SABRFitParam").ClearContents
+            Range("SABRFitParamAdj").ClearContents
+            Range("SABRFitParamExt").ClearContents
+            
+            Workbooks.Open Filename:=fn_folder & fn_src
+            Set rng_src = Workbooks(fn_src).Worksheets(1).Range("A1")
+            Do While rng_src.Offset(i, 0) > 0
+                For j = 0 To 6
+                    rng_dest.Offset(i, j).Value = rng_src.Offset(i, j).Value
+                Next j
+                i = i + 1
+            Loop
+            
+            Workbooks(fn_src).Close
+            
+            Call ExtractImpForward
+            Call BlackVol
+            Call SABRSampleSelect
+            Call SABRFit
+            
+            j = 1
+            Do While Range("OptionMarketParam")(j, 1).Value > 0
+                If Range("SABRFitParam")(j, 2) > 0 Then
+                    rng_result.Offset(k1, 0).Value = Format(dt, "yyyy-mm-dd")
+                    rng_result.Offset(k1, 1).Value = Range("OptionMarketParam")(j, 1)
+                    rng_result.Offset(k1, 2).Value = Range("OptionMarketParam")(j, 2)
+                    rng_result.Offset(k1, 3).Value = Range("OptionMarketParam")(j, 3)
+                    rng_result.Offset(k1, 4).Value = Range("OptionMarketParam")(j, 4)
+                    rng_result.Offset(k1, 5).Value = Range("SABRFitParam")(j, 2)
+                    rng_result.Offset(k1, 6).Value = Range("SABRFitParam")(j, 3)
+                    rng_result.Offset(k1, 7).Value = Range("SABRFitParam")(j, 4)
+                    k1 = k1 + 1
+                End If
+                j = j + 1
+            Loop
+
+            If dt >= DateSerial(2014, 11, 3) Then
+                n = 1
+                count = 0
+                Do While rng_result.Offset(m, 9).Value < dt
+                    m = m + 1
+                Loop
+                Do While rng_result.Offset(n, 0).Value <= rng_result.Offset(m, 9).Value And rng_result.Offset(n, 0).Value > 0
+                    If rng_result.Offset(n, 0).Value >= rng_result.Offset(m - 19, 9).Value And rng_result.Offset(n, 1).Value > 5 Then
+                        x = x + WorksheetFunction.Ln(CDbl(rng_result.Offset(n, 1).Value))
+                        y = y + WorksheetFunction.Ln(rng_result.Offset(n, 7).Value)
+                        xx = xx + WorksheetFunction.Ln(rng_result.Offset(n, 1).Value) * WorksheetFunction.Ln(rng_result.Offset(n, 1).Value)
+                        xy = xy + WorksheetFunction.Ln(rng_result.Offset(n, 1).Value) * WorksheetFunction.Ln(rng_result.Offset(n, 7).Value)
+                        count = count + 1
+                    End If
+                    n = n + 1
+                Loop
+                avgx = x / count
+                avgy = y / count
+                rng_result.Offset(m, 10).Value = (xy - avgx * y - x * avgy + count * avgx * avgy) / (xx - 2 * avgx * x + count * avgx * avgx)
+                rng_result.Offset(m, 11).Value = avgy - rng_result.Offset(m, 10).Value * avgx
+                
+                Call SABRFitAdj
+                j = 1
+                Do While Range("OptionMarketParam")(j, 1).Value > 0
+                    If Range("SABRFitParamAdj")(j, 2) > 0 Then
+                        rng_result_adj.Offset(k2, 0).Value = Format(dt, "yyyy-mm-dd")
+                        rng_result_adj.Offset(k2, 1).Value = Range("OptionMarketParam")(j, 1)
+                        rng_result_adj.Offset(k2, 2).Value = Range("OptionMarketParam")(j, 2)
+                        rng_result_adj.Offset(k2, 3).Value = Range("OptionMarketParam")(j, 3)
+                        rng_result_adj.Offset(k2, 4).Value = Range("OptionMarketParam")(j, 4)
+                        rng_result_adj.Offset(k2, 5).Value = Range("SABRFitParamAdj")(j, 2)
+                        rng_result_adj.Offset(k2, 6).Value = Range("SABRFitParamAdj")(j, 3)
+                        rng_result_adj.Offset(k2, 7).Value = Range("SABRFitParamAdj")(j, 4)
+                        k2 = k2 + 1
+                    End If
+                    j = j + 1
+                Loop
+                
+                Call SABRParamExt
+                j = 1
+                Do While Range("SABRFitParamExt")(j, 1).Value > 0
+                    rng_result_ext.Offset(k3, 0).Value = Format(dt, "yyyy-mm-dd")
+                    rng_result_ext.Offset(k3, 1).Value = Range("SABRFitParamExt")(j, 1)
+                    rng_result_ext.Offset(k3, 2).Value = Range("SABRFitParamExt")(j, 2)
+                    rng_result_ext.Offset(k3, 3).Value = Range("SABRFitParamExt")(j, 3)
+                    rng_result_ext.Offset(k3, 4).Value = Range("SABRFitParamExt")(j, 4)
+                    rng_result_ext.Offset(k3, 5).Value = Range("SABRFitParamExt")(j, 5)
+                    rng_result_ext.Offset(k3, 6).Value = Range("SABRFitParamExt")(j, 6)
+                    k3 = k3 + 1
+                    j = j + 1
+                Loop
+                
+                'Call LocalVol
+            End If
+        End If
+            
+        dt = dt + 1
+    Loop
+    
+
+End Sub
+

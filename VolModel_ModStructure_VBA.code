@@ -1,0 +1,53 @@
+' Structure: Exchange option data
+Public Type OptData
+    CP As Long
+    ttm As Single
+    Strike As Single
+    price As Single
+    impv As Single
+End Type
+
+' Structure: Parameters necessary to calculate Black vol
+Public Type MarketParam
+    ttm As Single
+    f As Single
+    rf As Single
+End Type
+
+' Structure: SABR parameters
+Public Type SABRParam
+    ttm As Single
+    alpha As Single
+    rho As Single
+    nu As Single
+    f As Single
+    rf As Single        ' Average integrated interest rate
+End Type
+
+' Structure: SABR parameter series along maturities
+Public Type SABRParamSeries
+    p(1 To 20) As SABRParam
+    t(1 To 20) As Single
+    size As Long
+End Type
+
+' Structure: Option data for a single maturity and SABR parameter
+Public Type SABRData
+    size As Long
+    p As SABRParam
+    opt(1 To 500) As OptData
+End Type
+
+' Structure: risk-free rate curve
+Public Type RateCurve
+    t(1 To 50) As Single
+    r(1 To 50) As Single
+    size As Long
+End Type
+
+' Structure: volatility surface
+Public Type VolSurf
+    t(1 To 20) As Single
+    k(1 To 20) As Single
+    vol(1 To 400) As Single
+End Type
